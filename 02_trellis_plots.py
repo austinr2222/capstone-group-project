@@ -1,9 +1,9 @@
 """
-AHRF SN 2025 — Trellis Plots (State-Level)
-===========================================
+AHRF 2025 — Trellis Plots (State + County Level)
+=================================================
 Uses plotnine (ggplot2 for Python) to create faceted/trellis plots
-illustrating distributions and relationships across US states for
-the health workforce data in AHRF SN 2025.
+illustrating distributions and relationships across US states (plots 1-7)
+and counties (plots 8-13) using the AHRF 2025 data.
 """
 
 import pandas as pd
@@ -348,5 +348,221 @@ p7 = (
 )
 ggsave(p7, os.path.join(PLOT_DIR, "07_work_settings_by_profession.png"), dpi=150)
 print("  Saved: plots/07_work_settings_by_profession.png")
+
+# ╔═════════════════════════════════════════════════════════════════════════════╗
+# ║  COUNTY-LEVEL PLOTS (Plots 8–13)                                          ║
+# ╚═════════════════════════════════════════════════════════════════════════════╝
+
+COUNTY_DIR = os.path.join(DATA_DIR, "NCHWA-2024-2025+AHRF+COUNTY+CSV")
+print("\n--- Loading county-level data ---")
+geo_c  = pd.read_csv(os.path.join(COUNTY_DIR, "AHRF2025geo.csv"), low_memory=False)
+pop_c  = pd.read_csv(os.path.join(COUNTY_DIR, "AHRF2025pop.csv"), low_memory=False)
+hp_c   = pd.read_csv(os.path.join(COUNTY_DIR, "AHRF2025hp.csv"),  low_memory=False)
+hf_c   = pd.read_csv(os.path.join(COUNTY_DIR, "AHRF2025hf.csv"),  low_memory=False)
+env_c  = pd.read_csv(os.path.join(COUNTY_DIR, "AHRF2025env.csv"), low_memory=False)
+
+# Build merged county frame
+cnty = geo_c[["fips_st_cnty", "cnty_name_st_abbrev", "st_name_abbrev",
+              "cens_regn_name", "rural_urban_contnm_23"]].copy()
+cnty = cnty.merge(pop_c[["fips_st_cnty", "popn_est_23"]], on="fips_st_cnty", how="left")
+cnty = cnty.merge(hp_c[["fips_st_cnty", "phys_nf_prim_care_pc_exc_rsdt_23",
+                         "md_nf_activ_23"]], on="fips_st_cnty", how="left")
+cnty = cnty.merge(hf_c[["fips_st_cnty", "hosp_23", "nurs_fac_23",
+                         "rural_hlth_clincs_23"]], on="fips_st_cnty", how="left")
+cnty = cnty.merge(env_c[["fips_st_cnty", "popn_densty_per_squr_mi_20",
+                          "good_air_qulty_dys_pct_24"]], on="fips_st_cnty", how="left")
+
+cnty["pcp_per_100k"] = (cnty["phys_nf_prim_care_pc_exc_rsdt_23"]
+                         / cnty["popn_est_23"].replace(0, np.nan) * 100_000)
+cnty["metro_status"] = cnty["rural_urban_contnm_23"].apply(
+    lambda x: "Metro" if x in [1, 2, 3] else ("Nonmetro" if x in [4, 5, 6, 7] else "Rural")
+)
+cnty["ruc_label"] = cnty["rural_urban_contnm_23"].map({
+    1: "1-Metro >=1M", 2: "2-Metro 250K-1M", 3: "3-Metro <250K",
+    4: "4-Nonmetro >=20K", 5: "5-Nonmetro 20K adj",
+    6: "6-Nonmetro 2.5-20K", 7: "7-Nonmetro 2.5-20K adj",
+    8: "8-Rural <2.5K", 9: "9-Rural <2.5K adj"
+})
+cnty["log_pop"] = np.log10(cnty["popn_est_23"].replace(0, np.nan))
+cnty = cnty.dropna(subset=["cens_regn_name", "metro_status"])
+
+print(f"County dataset: {cnty.shape[0]} counties × {cnty.shape[1]} columns")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PLOT 8: County population distribution by Census Region
+# ═════════════════════════════════════════════════════════════════════════════
+print("Creating Plot 8: County population distributions by Census Region...")
+
+p8 = (
+    ggplot(cnty.dropna(subset=["log_pop"]), aes(x="log_pop"))
+    + geom_histogram(aes(fill="cens_regn_name"), bins=30, alpha=0.7, color="white")
+    + facet_wrap("~cens_regn_name", ncol=2)
+    + labs(
+        title="County Population Distribution by Census Region",
+        x="Log10(Population Estimate 2023)",
+        y="Count",
+        fill="Region"
+    )
+    + theme_minimal()
+    + theme(
+        figure_size=(10, 7),
+        plot_title=element_text(size=14, weight="bold"),
+        strip_text=element_text(size=10, weight="bold"),
+        legend_position="none"
+    )
+)
+ggsave(p8, os.path.join(PLOT_DIR, "08_county_pop_by_region.png"), dpi=150)
+print("  Saved: plots/08_county_pop_by_region.png")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PLOT 9: PCP rate boxplots by Metro Status & Region
+# ═════════════════════════════════════════════════════════════════════════════
+print("Creating Plot 9: County PCP rate by metro status & region...")
+
+pcp_df = cnty.dropna(subset=["pcp_per_100k"]).copy()
+pcp_df["pcp_per_100k_clipped"] = pcp_df["pcp_per_100k"].clip(upper=300)
+
+p9 = (
+    ggplot(pcp_df, aes(x="metro_status", y="pcp_per_100k_clipped", fill="metro_status"))
+    + geom_boxplot(alpha=0.7, outlier_alpha=0.3)
+    + facet_wrap("~cens_regn_name", ncol=2)
+    + labs(
+        title="Primary Care Physicians per 100K by Metro Status & Region (County Level)",
+        x="",
+        y="PCPs per 100,000 Population",
+        fill="Status"
+    )
+    + theme_minimal()
+    + theme(
+        figure_size=(10, 7),
+        plot_title=element_text(size=13, weight="bold"),
+        strip_text=element_text(size=10, weight="bold"),
+        axis_text_x=element_text(rotation=25, ha="right")
+    )
+    + scale_fill_brewer(type="qual", palette="Set2")
+)
+ggsave(p9, os.path.join(PLOT_DIR, "09_county_pcp_rate_by_metro_region.png"), dpi=150)
+print("  Saved: plots/09_county_pcp_rate_by_metro_region.png")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PLOT 10: Hospitals per county faceted by region
+# ═════════════════════════════════════════════════════════════════════════════
+print("Creating Plot 10: Hospital count distribution by region...")
+
+hosp_df = cnty.dropna(subset=["hosp_23"]).copy()
+hosp_df["hosp_binned"] = pd.cut(
+    hosp_df["hosp_23"],
+    bins=[-1, 0, 1, 2, 3, 5, 200],
+    labels=["0", "1", "2", "3", "4-5", "6+"]
+)
+
+p10 = (
+    ggplot(hosp_df.dropna(subset=["hosp_binned"]),
+           aes(x="hosp_binned", fill="metro_status"))
+    + geom_bar(position="dodge", alpha=0.8)
+    + facet_wrap("~cens_regn_name", ncol=2)
+    + labs(
+        title="Number of Hospitals per County by Region & Metro Status",
+        x="Hospitals in County",
+        y="Number of Counties",
+        fill="Metro Status"
+    )
+    + theme_minimal()
+    + theme(
+        figure_size=(10, 7),
+        plot_title=element_text(size=14, weight="bold"),
+        strip_text=element_text(size=10, weight="bold"),
+    )
+    + scale_fill_brewer(type="qual", palette="Set2")
+)
+ggsave(p10, os.path.join(PLOT_DIR, "10_county_hospitals_by_region.png"), dpi=150)
+print("  Saved: plots/10_county_hospitals_by_region.png")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PLOT 11: Population vs Active MDs scatter — faceted by region
+# ═════════════════════════════════════════════════════════════════════════════
+print("Creating Plot 11: County population vs Active MDs scatter...")
+
+scatter_df = cnty.dropna(subset=["popn_est_23", "md_nf_activ_23"]).copy()
+scatter_df = scatter_df[(scatter_df["popn_est_23"] > 0) & (scatter_df["md_nf_activ_23"] > 0)]
+
+p11 = (
+    ggplot(scatter_df, aes(x="popn_est_23", y="md_nf_activ_23", color="metro_status"))
+    + geom_point(alpha=0.35, size=1.2)
+    + facet_wrap("~cens_regn_name", ncol=2)
+    + scale_x_log10()
+    + scale_y_log10()
+    + labs(
+        title="County Population vs Active MDs (log-log) by Census Region",
+        x="Population Estimate 2023 (log scale)",
+        y="Active Non-Federal MDs 2023 (log scale)",
+        color="Metro Status"
+    )
+    + theme_minimal()
+    + theme(
+        figure_size=(10, 7),
+        plot_title=element_text(size=14, weight="bold"),
+        strip_text=element_text(size=10, weight="bold"),
+    )
+)
+ggsave(p11, os.path.join(PLOT_DIR, "11_county_pop_vs_mds.png"), dpi=150)
+print("  Saved: plots/11_county_pop_vs_mds.png")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PLOT 12: Air quality by Rural-Urban Continuum Code
+# ═════════════════════════════════════════════════════════════════════════════
+print("Creating Plot 12: Air quality by Rural-Urban Continuum Code...")
+
+air_df = cnty.dropna(subset=["good_air_qulty_dys_pct_24", "ruc_label"]).copy()
+
+p12 = (
+    ggplot(air_df, aes(x="ruc_label", y="good_air_qulty_dys_pct_24", fill="ruc_label"))
+    + geom_boxplot(alpha=0.7, outlier_alpha=0.3)
+    + coord_flip()
+    + labs(
+        title="% Good Air Quality Days by Rural-Urban Continuum Code",
+        x="",
+        y="Good Air Quality Days (%)",
+        fill=""
+    )
+    + theme_minimal()
+    + theme(
+        figure_size=(10, 6),
+        plot_title=element_text(size=14, weight="bold"),
+        legend_position="none"
+    )
+)
+ggsave(p12, os.path.join(PLOT_DIR, "12_county_air_quality_by_ruc.png"), dpi=150)
+print("  Saved: plots/12_county_air_quality_by_ruc.png")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PLOT 13: Population density — faceted grid (Metro Status × Region)
+# ═════════════════════════════════════════════════════════════════════════════
+print("Creating Plot 13: Population density by metro status × region...")
+
+dens_df = cnty.dropna(subset=["popn_densty_per_squr_mi_20"]).copy()
+dens_df["log_density"] = np.log10(dens_df["popn_densty_per_squr_mi_20"].replace(0, np.nan))
+dens_df = dens_df.dropna(subset=["log_density"])
+
+p13 = (
+    ggplot(dens_df, aes(x="log_density", fill="metro_status"))
+    + geom_histogram(bins=30, alpha=0.7, color="white")
+    + facet_grid("metro_status~cens_regn_name")
+    + labs(
+        title="Population Density Distribution: Metro Status x Census Region",
+        x="Log10(Population Density per sq mi)",
+        y="Count"
+    )
+    + theme_minimal()
+    + theme(
+        figure_size=(12, 7),
+        plot_title=element_text(size=14, weight="bold"),
+        strip_text=element_text(size=9, weight="bold"),
+        legend_position="none"
+    )
+    + scale_fill_brewer(type="qual", palette="Set2")
+)
+ggsave(p13, os.path.join(PLOT_DIR, "13_county_density_by_metro_region.png"), dpi=150)
+print("  Saved: plots/13_county_density_by_metro_region.png")
 
 print("\nAll trellis plots saved to: group_project/plots/")
